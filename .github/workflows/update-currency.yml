@@ -3,22 +3,20 @@ name: Update Currency Rates
 on:
   schedule:
     - cron: "0 18 * * 1-5"   # 18:00 UTC = 21:00 Türkiye time, Monday–Friday
-  workflow_dispatch:         # allow manual run
+  workflow_dispatch:
 
 jobs:
   update:
     runs-on: ubuntu-latest
     permissions:
-      contents: write         # ✅ allows pushing changes to repo
+      contents: write
 
     steps:
-      # Step 1: Checkout code
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           persist-credentials: true
 
-      # Step 2: Fetch ECB XML and build currency.json
       - name: Fetch ECB rates and create JSON
         run: |
           mkdir -p api
@@ -30,13 +28,13 @@ jobs:
           echo '  "rates": {' >> api/currency.json
 
           currencies=("TRY" "HUF" "USD" "GBP" "CAD" "AUD" "JPY" "EUR")
-
           first=1
+
           for cur in "${currencies[@]}"; do
             if [ "$cur" = "EUR" ]; then
               rate=1
             else
-              rate=$(grep -oP "currency=\"$cur\" rate=\"\K[0-9.]+" ecb.xml || true)
+              rate=$(grep -oE "currency=['\"]$cur['\"] rate=['\"]([0-9.]+)['\"]" ecb.xml | sed -E "s/.*rate=['\"]([0-9.]+)['\"]/\1/")
             fi
 
             if [ -n "$rate" ]; then
@@ -49,7 +47,6 @@ jobs:
           echo '  }' >> api/currency.json
           echo '}' >> api/currency.json
 
-      # Step 3: Prevent empty file commit
       - name: Validate JSON
         run: |
           if ! grep -q '[0-9]' api/currency.json; then
@@ -57,7 +54,6 @@ jobs:
             exit 1
           fi
 
-      # Step 4: Commit and push if file changed
       - name: Commit and push if updated
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
