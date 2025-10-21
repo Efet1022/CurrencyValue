@@ -1,0 +1,44 @@
+name: Update Currency Rates
+
+on:
+  schedule:
+    - cron: "0 18 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch ECB rates and create JSON
+        run: |
+          mkdir -p api
+          curl -s https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml |
+          xmllint --xpath "//Cube/Cube/Cube" - |
+          awk -v now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '
+            BEGIN {
+              print "{"
+              print "  \"last_updated\": \"" now "\","
+              print "  \"base\": \"EUR\","
+              print "  \"rates\": {"
+            }
+            /currency=/ {
+              match($0, /currency=\"([A-Z]+)\" rate=\"([0-9.]+)\"/, a)
+              cur=a[1]; rate=a[2]
+              if (cur=="TRY" || cur=="HUF" || cur=="USD" || cur=="GBP" || cur=="CAD" || cur=="AUD" || cur=="JPY") {
+                if (count++) print ","
+                printf "    \"%s\": %s", cur, rate
+              }
+            }
+            END { print "\n  }\n}" }
+          ' > api/currency.json
+
+      - name: Commit and push if updated
+        run: |
+          git config user.name "GitHub Action"
+          git config user.email "actions@github.com"
+          git add api/currency.json
+          git diff --quiet || (git commit -m "Update currency rates" && git push)
