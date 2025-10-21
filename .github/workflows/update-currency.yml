@@ -2,43 +2,62 @@ name: Update Currency Rates
 
 on:
   schedule:
-    - cron: "0 18 * * 1-5"
-  workflow_dispatch:
+    - cron: "0 18 * * 1-5"   # 18:00 UTC = 21:00 Türkiye time, Monday–Friday
+  workflow_dispatch:         # allow manual run
 
 jobs:
   update:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  
+      contents: write         # ✅ allows pushing changes to repo
+
     steps:
+      # Step 1: Checkout code
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          persist-credentials: true 
+          persist-credentials: true
 
+      # Step 2: Fetch ECB XML and build currency.json
       - name: Fetch ECB rates and create JSON
         run: |
           mkdir -p api
-          curl -s https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml |
-          xmllint --xpath "//Cube/Cube/Cube" - |
-          awk -v now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '
-            BEGIN {
-              print "{"
-              print "  \"last_updated\": \"" now "\","
-              print "  \"base\": \"EUR\","
-              print "  \"rates\": {"
-            }
-            /currency=/ {
-              match($0, /currency=\"([A-Z]+)\" rate=\"([0-9.]+)\"/, a)
-              cur=a[1]; rate=a[2]
-              if (cur=="TRY" || cur=="HUF" || cur=="USD" || cur=="GBP" || cur=="CAD" || cur=="AUD" || cur=="JPY") {
-                if (count++) print ","
-                printf "    \"%s\": %s", cur, rate
-              }
-            }
-            END { print "\n  }\n}" }
-          ' > api/currency.json
+          curl -s https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml > ecb.xml
 
+          echo '{' > api/currency.json
+          echo '  "last_updated": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'",' >> api/currency.json
+          echo '  "base": "EUR",' >> api/currency.json
+          echo '  "rates": {' >> api/currency.json
+
+          currencies=("TRY" "HUF" "USD" "GBP" "CAD" "AUD" "JPY" "EUR")
+
+          first=1
+          for cur in "${currencies[@]}"; do
+            if [ "$cur" = "EUR" ]; then
+              rate=1
+            else
+              rate=$(grep -oP "currency=\"$cur\" rate=\"\K[0-9.]+" ecb.xml || true)
+            fi
+
+            if [ -n "$rate" ]; then
+              if [ $first -eq 0 ]; then echo ',' >> api/currency.json; fi
+              echo '    "'$cur'": '$rate >> api/currency.json
+              first=0
+            fi
+          done
+
+          echo '  }' >> api/currency.json
+          echo '}' >> api/currency.json
+
+      # Step 3: Prevent empty file commit
+      - name: Validate JSON
+        run: |
+          if ! grep -q '[0-9]' api/currency.json; then
+            echo "❌ No numeric rates found. Skipping commit."
+            exit 1
+          fi
+
+      # Step 4: Commit and push if file changed
       - name: Commit and push if updated
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -47,4 +66,3 @@ jobs:
           git config user.email "actions@github.com"
           git add api/currency.json
           git diff --cached --quiet || (git commit -m "Update currency rates" && git push)
-
